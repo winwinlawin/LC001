@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Lawin Canvas — LC-001 Harvest of Abundance</title>
+
+  <script>
+    window.__scriptStatus = { aframe: 'pending', mindar: 'pending' };
+  </script>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"
+    onload="window.__scriptStatus.aframe='loaded'"
+    onerror="window.__scriptStatus.aframe='ERROR'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"
+    onload="window.__scriptStatus.mindar='loaded'"
+    onerror="window.__scriptStatus.mindar='ERROR'"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #startScreen {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      background: linear-gradient(180deg, #2b1d0e 0%, #4a3319 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      color: #f5e6c8;
+    }
+
+    #startScreen h1 {
+      font-size: 1.6rem;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    #startScreen p.subtitle {
+      font-size: 1rem;
+      opacity: 0.85;
+      margin-bottom: 32px;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    #startButton {
+      background: #d4a13a;
+      color: #2b1d0e;
+      border: none;
+      padding: 16px 36px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      border-radius: 40px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+    }
+
+    #startButton:active {
+      transform: scale(0.97);
+    }
+
+    #hintText {
+      margin-top: 24px;
+      font-size: 0.85rem;
+      opacity: 0.6;
+    }
+
+    #scanOverlay {
+      position: fixed;
+      bottom: 30px;
+      left: 0;
+      right: 0;
+      z-index: 500;
+      text-align: center;
+      color: #fff;
+      font-size: 0.95rem;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
+
+    #debugStatus {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      z-index: 1000;
+      background: rgba(0,0,0,0.7);
+      color: #9f9;
+      font-size: 0.7rem;
+      font-family: monospace;
+      padding: 6px 10px;
+      border-radius: 6px;
+      max-height: 30vh;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    #debugStatus.error {
+      color: #f66;
+    }
+
+    .example-container {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="debugStatus">Waiting to start…</div>
+
+  <!-- Start / permission screen -->
+  <div id="startScreen">
+    <h1>Lawin Canvas</h1>
+    <p class="subtitle">LC-001 · Harvest of Abundance<br/>Biyaya ng Lumikha</p>
+    <button id="startButton" disabled>Loading…</button>
+    <p id="hintText">This will ask for camera access.<br/>Point your camera at the painting once started.</p>
+  </div>
+
+  <div id="scanOverlay">Point your camera at the painting</div>
+
+  <a-scene
+    id="arScene"
+    mindar-image="imageTargetSrc: ./targets.mind; autoStart: false; uiScanning: no; uiLoading: no;"
+    color-space="sRGB"
+    renderer="colorManagement: true, physicallyCorrectLights"
+    vr-mode-ui="enabled: false"
+    xr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false"
+    loading-screen="enabled: false"
+    embedded
+  >
+    <a-assets>
+      <video
+        id="revealVideo"
+        src="./reveal.mp4"
+        preload="metadata"
+        loop="false"
+        playsinline
+        webkit-playsinline
+        crossorigin="anonymous"
+      ></video>
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <a-entity mindar-image-target="targetIndex: 0">
+      <!-- Full overlay video plane matching painting aspect ratio (1536x1024 = 1.5) -->
+      <a-video
+        src="#revealVideo"
+        position="0 0 0"
+        width="1"
+        height="0.667"
+        rotation="0 0 0"
+      ></a-video>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    const startScreen = document.getElementById('startScreen');
+    const startButton = document.getElementById('startButton');
+    const scanOverlay = document.getElementById('scanOverlay');
+    const sceneEl = document.getElementById('arScene');
+    const video = document.getElementById('revealVideo');
+    const debugEl = document.getElementById('debugStatus');
+
+    let hasPlayed = false;
+
+    function log(msg, isError) {
+      debugEl.textContent = msg;
+      debugEl.classList.toggle('error', !!isError);
+      console.log('[LawinCanvas]', msg);
+    }
+
+    window.addEventListener('error', (e) => {
+      log('JS ERROR: ' + e.message, true);
+    });
+
+    log('Loading AR engine and assets…');
+
+    // Wait for the scene (and mindar-image system) to be fully ready
+    // before letting the person tap the button — this avoids the race
+    // condition where the button is tapped before scripts/assets finish loading.
+    function enableStartWhenReady(elapsedMs) {
+      elapsedMs = elapsedMs || 0;
+      const ready = sceneEl.systems && sceneEl.systems['mindar-image-system'];
+
+      if (ready) {
+        startButton.disabled = false;
+        startButton.textContent = 'Tap to Begin';
+        log('Ready. Tap the button to start.');
+        return;
+      }
+
+      const s = window.__scriptStatus || {};
+      const hasAframe = !!window.AFRAME;
+      const hasMindarComponent = hasAframe && window.AFRAME.components && !!window.AFRAME.components['mindar-image'];
+      log(
+        'aframe.js: ' + s.aframe +
+        ' | mindar.js: ' + s.mindar +
+        ' | AFRAME global: ' + hasAframe +
+        ' | mindar-image comp: ' + hasMindarComponent +
+        ' | elapsed: ' + Math.round(elapsedMs / 1000) + 's'
+      );
+
+      setTimeout(() => enableStartWhenReady(elapsedMs + 500), 500);
+    }
+    enableStartWhenReady();
+
+    startButton.addEventListener('click', async () => {
+      startButton.disabled = true;
+      log('Requesting camera permission…');
+
+      // Step 1: explicitly ask for camera access first, so the browser's
+      // native permission prompt is guaranteed to show up.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        // We only needed this to trigger/confirm the permission prompt.
+        // Stop it immediately — MindAR will open its own camera stream.
+        stream.getTracks().forEach(t => t.stop());
+        log('Camera permission granted. Loading AR…');
+      } catch (err) {
+        log('Camera permission DENIED or unavailable: ' + err.message, true);
+        startButton.disabled = false;
+        return;
+      }
+
+      // Step 2: unlock audio/video playback with this same user gesture
+      try {
+        video.muted = false;
+        await video.play();
+        video.pause();
+        video.currentTime = 0;
+      } catch (e) {
+        log('Video unlock warning: ' + e.message, true);
+      }
+
+      startScreen.style.display = 'none';
+
+      // Step 3: start MindAR tracking
+      try {
+        const arSystem = sceneEl.systems['mindar-image-system'];
+        if (!arSystem) {
+          log('ERROR: mindar-image-system not ready yet.', true);
+          return;
+        }
+        arSystem.start();
+        log('AR started. Point camera at the painting.');
+      } catch (e) {
+        log('ERROR starting AR: ' + e.message, true);
+      }
+    });
+
+    const targetEntity = document.querySelector('[mindar-image-target]');
+
+    targetEntity.addEventListener('targetFound', () => {
+      log('Target FOUND — playing video.');
+      scanOverlay.style.opacity = '0';
+      video.currentTime = 0;
+      video.play();
+      hasPlayed = true;
+    });
+
+    targetEntity.addEventListener('targetLost', () => {
+      log('Target lost — searching…');
+      scanOverlay.style.opacity = '1';
+      video.pause();
+    });
+
+    video.addEventListener('ended', () => {
+      video.currentTime = 0;
+      video.play();
+    });
+
+    sceneEl.addEventListener('arError', (e) => {
+      log('AR ERROR: ' + JSON.stringify(e.detail), true);
+    });
+  </script>
+
+</body>
+</html>
